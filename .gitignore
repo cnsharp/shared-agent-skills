@@ -1,0 +1,37 @@
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux system files
+*~
+.directory
+.Trash-*
+.nfs*
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+# NTFS alternate data stream (Mark-of-the-Web) left by PowerShell downloads
+*:Zone.Identifier
+
+# Editor / IDE temp files
+*.swp
+.vscode/
+
+# AI tools
+.claude/
+.codex/
+.codebuddy/
+.workbuddy/
+
+
+# Local temp test directory (used by install.sh tests, not committed)
+/tmp/
+
+# Placeholder files possibly left when symlinks break (optional)
+*.lnk_bak
