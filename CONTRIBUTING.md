@@ -4,8 +4,8 @@ Welcome to submit skills to `shared-agent-skills` that can be shared across mult
 
 ## Roles and Scope
 
-- **User-level skills**: symlinked via `install.sh` (or `install.ps1` on Windows) into each tool's user-level skills directory (e.g.  `~/.claude/skills`, `~/.codex/skills`; use `bash install.sh --list-tools` — or `install.ps1 --list-tools` on Windows — to see the full list), available in all projects. This repository is the source of this form.
-- **Project-level skills**: if you need to share alongside a specific project, you can place them in that project's `.codex/skills/` or `.claude/skills/`; this is outside this repository's scope.
+- **User-level skills**: symlinked via `install.sh` (or `install.ps1` on Windows) into each tool's user-level skills directory (e.g.  `~/.claude/skills`, `~/.agents/skills`; use `bash install.sh --list-tools` — or `install.ps1 --list-tools` on Windows — to see the full list), available in all projects. This repository is the source of this form.
+- **Project-level skills**: if you need to share alongside a specific project, you can place them in that project's `.agents/skills/` or `.claude/skills/`; this is outside this repository's scope.
 
 ## Steps to Create a Skill
 

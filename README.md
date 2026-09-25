@@ -72,7 +72,7 @@ Default target directories (overridable via environment variables; see `--list-t
 | Claude Code | `~/.claude/skills` | `CLAUDE_SKILLS_DIR` |
 | Cline | `~/.cline/skills` | `CLINE_SKILLS_DIR` |
 | CodeBuddy | `~/.codebuddy/skills` | `CODEBUDDY_SKILLS_DIR` |
-| OpenAI Codex | `~/.codex/skills` | `CODEX_SKILLS_DIR` |
+| OpenAI Codex | `~/.agents/skills` | `CODEX_SKILLS_DIR` |
 | Continue | `~/.continue/skills` | `CONTINUE_SKILLS_DIR` |
 | GitHub Copilot | `~/.github/skills` | `COPILOT_SKILLS_DIR` |
 | Cursor | `~/.cursor/skills` | `CURSOR_SKILLS_DIR` |
