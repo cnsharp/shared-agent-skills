@@ -223,8 +223,13 @@ function Merge-HookJson {
         [string]$Path,
         [string]$Cmd,
         [string]$Needs,  # yes | no
-        [string]$Fmt     # claude | cursor | trae | ...
+        [string]$Fmt     # claude | cursor | trae | hermes | kimi | autohand
     )
+
+    # Non-JSON formats get their own handlers.
+    if ($Fmt -eq 'hermes')   { return Merge-HookYaml    $Mode $Path $Cmd }
+    if ($Fmt -eq 'kimi')     { return Merge-HookToml    $Mode $Path $Cmd }
+    if ($Fmt -eq 'autohand') { return Merge-HookAutohand $Mode $Path $Cmd }
 
     if ($Fmt -eq 'cursor') { $event = 'sessionStart' } else { $event = 'SessionStart' }
 
@@ -307,6 +312,177 @@ function Merge-HookJson {
     Backup-HookFile $Path
     Set-HookJson $Path $data
     Write-Host ("  OK removed {0} startup hook(s) from {1}" -f $removed, $Path)
+    return $true
+}
+
+# ── Kimi: ~/.kimi-code/config.toml — [[hooks]] array-of-tables ──
+# Verified against kimi.com/code/docs: event="SessionStart", matcher="startup".
+function Merge-HookToml {
+    param([string]$Mode, [string]$Path, [string]$Cmd)
+    $event = 'SessionStart'; $matcher = 'startup'
+    $block = "[[hooks]]`nevent = `"$event`"`nmatcher = `"$matcher`"`ncommand = `"$Cmd`"`n"
+
+    if ($Mode -eq 'add') {
+        $txt = ''
+        if (Test-Path $Path) { $txt = Get-Content $Path -Raw }
+        if ($txt.Contains($Cmd)) { Write-Host "  · already present (skipped): $Path"; return $true }
+        if ($txt -and -not $txt.EndsWith("`n")) { $txt += "`n" }
+        $dir = Split-Path $Path
+        if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        Backup-HookFile $Path
+        Set-Content -Path $Path -Value ($txt + $block) -Encoding UTF8
+        Write-Host "  OK added startup hook to $Path"
+        return $true
+    }
+
+    if (-not (Test-Path $Path)) { Write-Host "  · no config, nothing to remove: $Path"; return $true }
+    $txt = Get-Content $Path -Raw
+    if (-not $txt.Contains($Cmd)) { Write-Host "  · startup hook not found (skipped): $Path"; return $true }
+    $lines = $txt -split "`n"
+    $out = @(); $i = 0; $n = $lines.Count
+    while ($i -lt $n) {
+        if ($lines[$i].Trim() -eq '[[hooks]]') {
+            $j = $i; $blk = @()
+            while ($j -lt $n -and -not ($j -gt $i -and $lines[$j].Trim() -eq '[[hooks]]')) { $blk += $lines[$j]; $j++ }
+            if (($blk -join "`n").Contains($Cmd)) { $i = $j; continue }
+            $out += $blk; $i = $j
+        } else { $out += $lines[$i]; $i++ }
+    }
+    Backup-HookFile $Path
+    Set-Content -Path $Path -Value ($out -join "`n") -Encoding UTF8
+    Write-Host "  OK removed startup hook from $Path"
+    return $true
+}
+
+# ── Autohand: ~/.autohand/config.json — { "hooks": { "enabled": true, "hooks": [ {event, command} ] } } ──
+# Verified against docs.autohand.ai: event "session-start", no matcher needed.
+function Merge-HookAutohand {
+    param([string]$Mode, [string]$Path, [string]$Cmd)
+    $event = 'session-start'
+    $data = $null
+    if (Test-Path $Path) {
+        try { $data = Get-Content $Path -Raw | ConvertFrom-Json -ErrorAction Stop }
+        catch { Write-Error ("ERROR: cannot parse JSON at {0}" -f $Path); return $false }
+    } else { $data = New-Object PSObject }
+
+    if ($Mode -eq 'add') {
+        if (-not $data.PSObject.Properties['hooks']) {
+            Add-Member -InputObject $data -MemberType NoteProperty -Name 'hooks' -Value (New-Object PSObject)
+        }
+        $hooks = $data.hooks
+        if (-not $hooks.PSObject.Properties['hooks']) {
+            Add-Member -InputObject $hooks -MemberType NoteProperty -Name 'hooks' -Value @()
+        }
+        $hl = $hooks.hooks
+        if ($hl -isnot [Array]) { $hl = @($hl) }
+        foreach ($h in $hl) {
+            if ($h -is [PSCustomObject] -and $h.PSObject.Properties['event'] -and $h.event -eq $event -and
+                $h.PSObject.Properties['command'] -and $h.command -eq $Cmd) {
+                Write-Host "  · already present (skipped): $Path"; return $true
+            }
+        }
+        $entry = New-Object PSObject
+        Add-Member -InputObject $entry -MemberType NoteProperty -Name 'event' -Value $event
+        Add-Member -InputObject $entry -MemberType NoteProperty -Name 'command' -Value $Cmd
+        $hl = $hl + $entry
+        $hooks.hooks = $hl
+        $hooks.enabled = $true
+        Backup-HookFile $Path
+        Set-HookJson $Path $data
+        Write-Host "  OK added startup hook to $Path"
+        return $true
+    }
+
+    if (-not (Test-Path $Path)) { Write-Host "  · no config, nothing to remove: $Path"; return $true }
+    $hooks = $data.hooks
+    $hl = if ($hooks -and $hooks.PSObject.Properties['hooks']) { $hooks.hooks } else { @() }
+    if ($hl -isnot [Array]) { $hl = @($hl) }
+    $before = $hl.Count
+    $kept = @()
+    foreach ($h in $hl) {
+        if (-not ($h -is [PSCustomObject] -and $h.PSObject.Properties['event'] -and $h.event -eq $event -and
+                  $h.PSObject.Properties['command'] -and $h.command -eq $Cmd)) { $kept += $h }
+    }
+    $removed = $before - $kept.Count
+    if ($removed -eq 0) { Write-Host "  · startup hook not found (skipped): $Path"; return $true }
+    if ($kept.Count -gt 0) {
+        $hooks.hooks = $kept
+        if ($hooks.PSObject.Properties['enabled']) { $hooks.PSObject.Properties.Remove('enabled') }
+    } else {
+        $data.PSObject.Properties.Remove('hooks')
+    }
+    Backup-HookFile $Path
+    Set-HookJson $Path $data
+    Write-Host ("  OK removed {0} startup hook(s) from {1}" -f $removed, $Path)
+    return $true
+}
+
+# ── Hermes: ~/.hermes/config.yaml — hooks: { on_session_start: [ {command, timeout} ] } ──
+# Verified against ~/.hermes/hermes-agent: event "on_session_start". YAML needs PyYAML,
+# so delegate to python3 if available; otherwise print a manual snippet and skip.
+function Merge-HookYaml {
+    param([string]$Mode, [string]$Path, [string]$Cmd)
+    if (-not (Get-Command python3 -ErrorAction SilentlyContinue)) {
+        Write-Warning "python3 not found; cannot auto-edit Hermes YAML. Add this to $Path under 'hooks':"
+        Write-Host ("  on_session_start:`n    - command: {0}`n      timeout: 30" -f $Cmd)
+        return $true
+    }
+    $py = @'
+import sys, os
+mode, path, cmd = sys.argv[1:4]
+try:
+    import yaml
+except ImportError:
+    sys.stderr.write("ERROR: PyYAML is required to edit Hermes config.yaml (Hermes itself uses it). Install it or add the hook manually.\n")
+    sys.exit(2)
+event = "on_session_start"
+def backup(p):
+    if os.path.exists(p):
+        try: open(p+".bak","w").write(open(p).read())
+        except Exception: pass
+def load(p):
+    if not os.path.exists(p): return {}
+    with open(p) as f: return yaml.safe_load(f) or {}
+def write(p,d):
+    os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+    t=p+".tmp"
+    with open(t,"w") as f:
+        yaml.safe_dump(d,f,default_flow_style=False,sort_keys=False,allow_unicode=True); f.write("\n")
+    os.replace(t,p)
+if mode=="add":
+    data=load(path)
+    if not isinstance(data,dict): data={}
+    h=data.get("hooks")
+    if not isinstance(h,dict): h={}; data["hooks"]=h
+    lst=h.get(event)
+    if not isinstance(lst,list): lst=[]; h[event]=lst
+    if any(isinstance(x,dict) and x.get("command")==cmd for x in lst):
+        print("  · already present (skipped): "+path); sys.exit(0)
+    lst.append({"command":cmd,"timeout":30})
+    backup(path); write(path,data)
+    print("  OK added startup hook to "+path)
+    print("  NOTE: Hermes requires the command to be allowlisted before it fires: run `hermes hooks --accept-hooks` (or set hooks_auto_accept: true).")
+elif mode=="remove":
+    if not os.path.exists(path):
+        print("  · no config, nothing to remove: "+path); sys.exit(0)
+    data=load(path)
+    h=data.get("hooks",{}) if isinstance(data,dict) else {}
+    lst=h.get(event,[]) if isinstance(h,dict) else []
+    before=len(lst)
+    lst=[x for x in lst if not (isinstance(x,dict) and x.get("command")==cmd)]
+    removed=before-len(lst)
+    if removed==0:
+        print("  · startup hook not found (skipped): "+path); sys.exit(0)
+    if lst: h[event]=lst
+    else: h.pop(event,None)
+    if h: data["hooks"]=h
+    else: data.pop("hooks",None)
+    backup(path); write(path,data)
+    print("  OK removed startup hook from "+path)
+'@
+    $result = ($py | python3 - $Mode $Path $Cmd 2>&1)
+    if ($LASTEXITCODE -eq 2) { Write-Error $result; return $false }
+    Write-Host $result
     return $true
 }
 

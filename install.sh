@@ -177,7 +177,20 @@ def backup(p):
         except Exception:
             pass
 
-def load(p):
+def read_text(p):
+    if not os.path.exists(p):
+        return ""
+    with open(p, "r") as f:
+        return f.read()
+
+def write_text(p, s):
+    os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(s)
+    os.replace(tmp, p)
+
+def load_json(p):
     if not os.path.exists(p):
         return {}
     try:
@@ -187,7 +200,7 @@ def load(p):
         sys.stderr.write("ERROR: cannot parse JSON at %s: %s\n" % (p, e))
         sys.exit(2)
 
-def write(p, data):
+def write_json(p, data):
     os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
     tmp = p + ".tmp"
     with open(tmp, "w") as f:
@@ -195,70 +208,224 @@ def write(p, data):
         f.write("\n")
     os.replace(tmp, p)
 
-if fmt == "cursor":
+# ── claude / codebuddy / cursor / trae (JSON) ──
+def json_handlers(event, make_group, cmd_of):
+    if mode == "add":
+        data = load_json(path)
+        if fmt in ("cursor", "trae") and "version" not in data:
+            data["version"] = 1
+        hooks = data.setdefault("hooks", {})
+        groups = hooks.setdefault(event, [])
+        for g in groups:
+            if cmd_of(g) == cmd:
+                print("  · already present (skipped): %s" % path)
+                sys.exit(0)
+        groups.append(make_group())
+        backup(path)
+        write_json(path, data)
+        print("  ✓ added startup hook to %s" % path)
+    elif mode == "remove":
+        if not os.path.exists(path):
+            print("  · no settings file, nothing to remove: %s" % path)
+            sys.exit(0)
+        data = load_json(path)
+        hooks = data.get("hooks", {})
+        groups = hooks.get(event, [])
+        before = len(groups)
+        groups = [g for g in groups if cmd_of(g) != cmd]
+        removed = before - len(groups)
+        if removed == 0:
+            print("  · startup hook not found (skipped): %s" % path)
+            sys.exit(0)
+        if groups:
+            hooks[event] = groups
+        else:
+            hooks.pop(event, None)
+        if hooks:
+            data["hooks"] = hooks
+        else:
+            data.pop("hooks", None)
+        backup(path)
+        write_json(path, data)
+        print("  ✓ removed %d startup hook(s) from %s" % (removed, path))
+
+if fmt in ("cursor", "trae"):
     event = "sessionStart"
-    def handlers_of(group):
-        return group.get("hooks", []) if isinstance(group, dict) else []
     def make_group():
         return {"command": cmd}
     def cmd_of(group):
         if isinstance(group, dict):
             return group.get("command")
         return None
+    json_handlers(event, make_group, cmd_of)
+elif fmt == "autohand":
+    # Autohand: ~/.autohand/config.json -> { "hooks": { "enabled": true, "hooks": [ {event, command} ] } }
+    # Verified against docs.autohand.ai (event "session-start", no matcher needed).
+    event = "session-start"
+    if mode == "add":
+        data = load_json(path)
+        hooks = data.setdefault("hooks", {})
+        if not isinstance(hooks, dict):
+            hooks = {}; data["hooks"] = hooks
+        hl = hooks.get("hooks")
+        if not isinstance(hl, list):
+            hl = []; hooks["hooks"] = hl
+        if any(isinstance(h, dict) and h.get("event") == event and h.get("command") == cmd for h in hl):
+            print("  · already present (skipped): %s" % path)
+            sys.exit(0)
+        hl.append({"event": event, "command": cmd})
+        hooks["enabled"] = True
+        backup(path)
+        write_json(path, data)
+        print("  ✓ added startup hook to %s" % path)
+    elif mode == "remove":
+        if not os.path.exists(path):
+            print("  · no config, nothing to remove: %s" % path)
+            sys.exit(0)
+        data = load_json(path)
+        hooks = data.get("hooks", {})
+        hl = hooks.get("hooks", []) if isinstance(hooks, dict) else []
+        before = len(hl)
+        hl = [h for h in hl if not (isinstance(h, dict) and h.get("event") == event and h.get("command") == cmd)]
+        removed = before - len(hl)
+        if removed == 0:
+            print("  · startup hook not found (skipped): %s" % path)
+            sys.exit(0)
+        hooks["hooks"] = hl
+        if not hl:
+            hooks.pop("enabled", None)
+            hooks.pop("hooks", None)
+            if not hooks:
+                data.pop("hooks", None)
+        data["hooks"] = hooks
+        backup(path)
+        write_json(path, data)
+        print("  ✓ removed %d startup hook(s) from %s" % (removed, path))
+elif fmt == "hermes":
+    # Hermes: ~/.hermes/config.yaml -> hooks: { on_session_start: [ {command, timeout} ] }
+    # Verified against ~/.hermes/hermes-agent (agent/shell_hooks.py): event "on_session_start".
+    try:
+        import yaml
+    except ImportError:
+        sys.stderr.write("ERROR: PyYAML is required to edit ~/.hermes/config.yaml "
+                         "(Hermes itself depends on it). Install it and retry.\n")
+        sys.exit(2)
+    event = "on_session_start"
+    def load_yaml(p):
+        if not os.path.exists(p):
+            return {}
+        with open(p) as f:
+            return yaml.safe_load(f) or {}
+    def write_yaml(p, data):
+        os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w") as f:
+            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            f.write("\n")
+        os.replace(tmp, p)
+    if mode == "add":
+        data = load_yaml(path)
+        if not isinstance(data, dict):
+            data = {}
+        hooks = data.get("hooks")
+        if not isinstance(hooks, dict):
+            hooks = {}; data["hooks"] = hooks
+        lst = hooks.get(event)
+        if not isinstance(lst, list):
+            lst = []; hooks[event] = lst
+        if any(isinstance(x, dict) and x.get("command") == cmd for x in lst):
+            print("  · already present (skipped): %s" % path)
+            sys.exit(0)
+        lst.append({"command": cmd, "timeout": 30})
+        backup(path)
+        write_yaml(path, data)
+        print("  ✓ added startup hook to %s" % path)
+        print("  ℹ Hermes requires the command to be allowlisted before it fires: "
+              "run `hermes hooks --accept-hooks` (or set hooks_auto_accept: true).")
+    elif mode == "remove":
+        if not os.path.exists(path):
+            print("  · no config, nothing to remove: %s" % path)
+            sys.exit(0)
+        data = load_yaml(path)
+        hooks = data.get("hooks", {}) if isinstance(data, dict) else {}
+        lst = hooks.get(event, []) if isinstance(hooks, dict) else []
+        before = len(lst)
+        lst = [x for x in lst if not (isinstance(x, dict) and x.get("command") == cmd)]
+        removed = before - len(lst)
+        if removed == 0:
+            print("  · startup hook not found (skipped): %s" % path)
+            sys.exit(0)
+        if lst:
+            hooks[event] = lst
+        else:
+            hooks.pop(event, None)
+        if hooks:
+            data["hooks"] = hooks
+        else:
+            data.pop("hooks", None)
+        backup(path)
+        write_yaml(path, data)
+        print("  ✓ removed %d startup hook(s) from %s" % (removed, path))
+elif fmt == "kimi":
+    # Kimi: ~/.kimi-code/config.toml -> [[hooks]] array-of-tables, event="SessionStart", matcher="startup"
+    # Verified against kimi.com/code/docs (SessionStart + matcher "startup" fires only on new session).
+    event = "SessionStart"; matcher = "startup"
+    def block_for():
+        return '[[hooks]]\nevent = "%s"\nmatcher = "%s"\ncommand = "%s"\n' % (event, matcher, cmd)
+    def strip_block(txt, cmd):
+        lines = txt.split("\n")
+        out = []
+        i = 0
+        n = len(lines)
+        while i < n:
+            if lines[i].strip() == "[[hooks]]":
+                j = i
+                block = []
+                while j < n and not (j > i and lines[j].strip() == "[[hooks]]"):
+                    block.append(lines[j]); j += 1
+                if cmd in "\n".join(block):
+                    i = j
+                    continue
+                out.extend(block); i = j
+            else:
+                out.append(lines[i]); i += 1
+        return "\n".join(out)
+    if mode == "add":
+        txt = read_text(path)
+        if cmd in txt:
+            print("  · already present (skipped): %s" % path)
+            sys.exit(0)
+        if txt and not txt.endswith("\n"):
+            txt += "\n"
+        backup(path)
+        write_text(path, txt + block_for())
+        print("  ✓ added startup hook to %s" % path)
+    elif mode == "remove":
+        if not os.path.exists(path):
+            print("  · no config, nothing to remove: %s" % path)
+            sys.exit(0)
+        txt = read_text(path)
+        if cmd not in txt:
+            print("  · startup hook not found (skipped): %s" % path)
+            sys.exit(0)
+        backup(path)
+        write_text(path, strip_block(txt, cmd))
+        print("  ✓ removed startup hook from %s" % path)
 else:
+    # default: claude / codebuddy
     event = "SessionStart"
-    def handlers_of(group):
-        return group.get("hooks", []) if isinstance(group, dict) else []
     def make_group():
         g = {"hooks": [{"type": "command", "command": cmd}]}
         if needs == "yes":
             g["matcher"] = "startup"
         return g
     def cmd_of(group):
-        for h in handlers_of(group):
-            if isinstance(h, dict) and h.get("command") == cmd:
-                return cmd
+        if isinstance(group, dict):
+            for h in group.get("hooks", []):
+                if isinstance(h, dict) and h.get("command") == cmd:
+                    return cmd
         return None
-
-if mode == "add":
-    data = load(path)
-    if fmt in ("cursor", "trae") and "version" not in data:
-        data["version"] = 1
-    hooks = data.setdefault("hooks", {})
-    groups = hooks.setdefault(event, [])
-    for g in groups:
-        if cmd_of(g) == cmd:
-            print("  · already present (skipped): %s" % path)
-            sys.exit(0)
-    groups.append(make_group())
-    backup(path)
-    write(path, data)
-    print("  ✓ added startup hook to %s" % path)
-
-elif mode == "remove":
-    if not os.path.exists(path):
-        print("  · no settings file, nothing to remove: %s" % path)
-        sys.exit(0)
-    data = load(path)
-    hooks = data.get("hooks", {})
-    groups = hooks.get(event, [])
-    before = len(groups)
-    groups = [g for g in groups if cmd_of(g) != cmd]
-    removed = before - len(groups)
-    if removed == 0:
-        print("  · startup hook not found (skipped): %s" % path)
-        sys.exit(0)
-    if groups:
-        hooks[event] = groups
-    else:
-        hooks.pop(event, None)
-    if hooks:
-        data["hooks"] = hooks
-    else:
-        data.pop("hooks", None)
-    backup(path)
-    write(path, data)
-    print("  ✓ removed %d startup hook(s) from %s" % (removed, path))
+    json_handlers(event, make_group, cmd_of)
 PYEOF
   }
 
