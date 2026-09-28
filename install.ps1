@@ -10,6 +10,10 @@
 #   4. Validatable: before linking, check each SKILL.md's frontmatter for name/description.
 #   5. Multi-agent extensible: supported agents are declared in agents.cfg (one line per agent:
 #      name|ENV_VAR|DEFAULT_DIR). Adding an agent changes only that file.
+#   6. Shared hub: ~/.agents/skills (Open Agent Skills standard) is junctioned to this repo's
+#      skills/; agents that read it receive public skills automatically and are skipped by the
+#      per-agent bridge loop below. Agents that do not read the hub get public skills bridged
+#      into their own skills directory (private real subdirs are preserved = mixed mode).
 #
 # On Windows, links are created as Directory Junctions instead of symbolic links, so they work
 # without administrator rights in most setups (no "Developer Mode" required). A junction points at
@@ -453,6 +457,13 @@ $agents = Get-Agents
 if ($Selected.Count -eq 0) { $ActiveTools = $agents }
 else                       { $ActiveTools = $agents | Where-Object { $Selected -contains $_.name } }
 
+# ── Public skills hub (Open Agent Skills standard: ~/.agents/skills) ──
+# Agents whose DEFAULT_DIR equals this path receive public skills directly via the hub junction
+# and are skipped by the per-agent bridge loop. Derived from the 'agents' entry's DEFAULT_DIR;
+# defaults to ~/.agents/skills if that entry is absent.
+$Hub = (Get-Agent 'agents').defaultDir
+if (-not $Hub) { $Hub = Expand-Path '~/.agents/skills' }
+
 # --check mode
 if ($DoCheck) {
     Write-Host "Validating skill frontmatter under $SrcDir..."
@@ -479,6 +490,18 @@ if ($DoUninstall) {
             }
         }
     }
+    # Remove the hub junction if it points to this repo (restore backup if we made one).
+    if (Test-Path $Hub) {
+        $hItem = Get-Item $Hub -Force
+        if (($hItem.LinkType -eq 'Junction' -or $hItem.LinkType -eq 'SymbolicLink') -and (Test-Ours $Hub)) {
+            Remove-Item $Hub -Force
+            Write-Host "  OK Removed hub junction $Hub"
+            if (Test-Path ($Hub + '.bak')) {
+                Move-Item ($Hub + '.bak') $Hub -Force
+                Write-Host "  OK Restored $Hub from backup"
+            }
+        }
+    }
     Write-Host "Uninstall complete (only links created by this repo were removed; other skills untouched)."
     exit 0
 }
@@ -497,10 +520,41 @@ if (-not $ok) {
     exit 1
 }
 
+# ── Public skills hub (Open Agent Skills standard: ~/.agents/skills) ──
+# Junction the hub to this repo's skills/ so every agent that reads it receives public
+# skills automatically. Idempotent: skips if already correctly linked; backs up a real
+# pre-existing dir before replacing it.
+$parent = Split-Path $Hub
+if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent | Out-Null }
+if (Test-Path $Hub) {
+    $hItem = Get-Item $Hub -Force
+    if (($hItem.LinkType -eq 'Junction' -or $hItem.LinkType -eq 'SymbolicLink') -and (Test-Ours $Hub)) {
+        Write-Host "-> Hub already linked: $Hub -> $SrcDir"
+    }
+    elseif ($hItem.LinkType -eq 'Junction' -or $hItem.LinkType -eq 'SymbolicLink') {
+        Write-Warning "Hub exists but points elsewhere ($Hub -> $($hItem.Target)). Leaving it untouched; hub readers depend on it."
+    }
+    else {
+        Move-Item $Hub ($Hub + '.bak') -Force
+        Write-Host "  - Backed up existing $Hub to $($Hub).bak"
+        New-Item -ItemType Junction -Path $Hub -Target $SrcDir | Out-Null
+        Write-Host "-> Created hub junction: $Hub -> $SrcDir"
+    }
+}
+else {
+    New-Item -ItemType Junction -Path $Hub -Target $SrcDir | Out-Null
+    Write-Host "-> Created hub junction: $Hub -> $SrcDir"
+}
+
 $linked = 0
 foreach ($agent in $ActiveTools) {
     $tdir = Resolve-Target $agent
     if (-not $tdir) { continue }
+    # Agents whose skills dir IS the hub read public skills via the hub junction directly.
+    if ($tdir -eq $Hub) {
+        Write-Host "-> $($agent.name) reads the hub directly ($Hub); skipped (served by hub)"
+        continue
+    }
     if (-not (Test-Path $tdir)) { New-Item -ItemType Directory -Path $tdir | Out-Null }
     Write-Host "-> Linking to $($agent.name): $tdir"
     foreach ($d in (Get-ChildItem $SrcDir -Directory)) {
