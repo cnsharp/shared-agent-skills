@@ -11,6 +11,10 @@
 #   4. Validatable: before linking, check each SKILL.md's frontmatter for name/description.
 #   5. Multi-agent extensible: supported agents are declared in agents.cfg (one line per agent:
 #      name|ENV_VAR|DEFAULT_DIR). Adding an agent changes only that file.
+#   6. Shared hub: ~/.agents/skills (Open Agent Skills standard) is symlinked to this repo's
+#      skills/; agents that read it receive public skills automatically and are skipped by the
+#      per-agent bridge loop below. Agents that do not read the hub get public skills bridged
+#      into their own skills directory (private real subdirs are preserved = mixed mode).
 #
 # Usage:
 #   bash install.sh                 # Link to all configured agent directories
@@ -355,6 +359,13 @@ expand_path() {
   fi
 }
 
+# Public skills hub (Open Agent Skills standard). Agents whose DEFAULT_DIR equals this
+# path receive public skills directly via the hub symlink and are skipped by the per-agent
+# bridge loop. Derived from the 'agents' entry's DEFAULT_DIR; defaults to ~/.agents/skills.
+_hub_raw="$(tool_info agents 2>/dev/null | cut -d'|' -f3)"
+[ -z "$_hub_raw" ] && _hub_raw="~/.agents/skills"
+HUB="$(expand_path "$_hub_raw")"
+
 # resolve_target <agent> -> print the agent's skills directory; empty if unrecognized
 resolve_target() {
   local info
@@ -461,6 +472,13 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
       fi
     done
   done
+  # Remove the hub symlink if it points to this repo (restore backup if we made one).
+  if [ -L "$HUB" ] && [ "$(readlink "$HUB")" = "$SRC_DIR" ]; then
+    rm -f "$HUB" && echo "  ✓ Removed hub symlink $HUB"
+    if [ -e "$HUB.bak" ]; then
+      mv "$HUB.bak" "$HUB" 2>/dev/null && echo "  ✓ Restored $HUB from backup"
+    fi
+  fi
   echo "Uninstall complete (only links created by this repo were removed; other skills untouched)."
   exit 0
 fi
@@ -480,10 +498,32 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 
+# ── Public skills hub (Open Agent Skills standard: ~/.agents/skills) ──
+# Symlink the hub to this repo's skills/ so every agent that reads it receives public
+# skills automatically. Idempotent: skips if already correctly linked; backs up a real
+# pre-existing dir before replacing it.
+if [ -L "$HUB" ]; then
+  if [ "$(readlink "$HUB")" = "$SRC_DIR" ]; then
+    echo "→ Hub already linked: $HUB -> $SRC_DIR"
+  else
+    echo "  ⚠ Hub exists but points elsewhere ($HUB -> $(readlink "$HUB")). Leaving it untouched; hub readers depend on it." >&2
+  fi
+elif [ -e "$HUB" ]; then
+  mv "$HUB" "$HUB.bak" 2>/dev/null && echo "  · Backed up existing $HUB to $HUB.bak"
+  ln -s "$SRC_DIR" "$HUB" && echo "→ Created hub symlink: $HUB -> $SRC_DIR"
+else
+  ln -s "$SRC_DIR" "$HUB" && echo "→ Created hub symlink: $HUB -> $SRC_DIR"
+fi
+
 linked=0
 for tool in "${ACTIVE_TOOLS[@]}"; do
   tdir="$(resolve_target "$tool")"
   [ -z "$tdir" ] && continue
+  # Agents whose skills dir IS the hub read public skills via the hub symlink directly.
+  if [ "$tdir" = "$HUB" ]; then
+    echo "→ $tool reads the hub directly ($HUB); skipped (served by hub)"
+    continue
+  fi
   mkdir -p "$tdir"
   echo "→ Linking to $tool: $tdir"
   for d in "$SRC_DIR"/*/; do
