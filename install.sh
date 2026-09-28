@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install.sh — Symlink the skills under this repo's skills/ into each AI agent's
-# (Claude Code / OpenAI Codex / Cursor / Gemini CLI / Windsurf / Cline / Kilo / OpenClaw / Agents (shared ~/.agents/skills) /
+# (Claude Code / OpenAI Codex / Cursor / Gemini CLI / Windsurf / Cline / Kilo / OpenClaw / Hub (shared ~/.agents/skills) /
 # WorkBuddy / CodeBuddy / Hermes, etc.) skills directory.
 #
 # Design principles:
@@ -361,10 +361,9 @@ expand_path() {
 
 # Public skills hub (Open Agent Skills standard). Agents whose DEFAULT_DIR equals this
 # path receive public skills directly via the hub symlink and are skipped by the per-agent
-# bridge loop. Derived from the 'agents' entry's DEFAULT_DIR; defaults to ~/.agents/skills.
-_hub_raw="$(tool_info agents 2>/dev/null | cut -d'|' -f3)"
-[ -z "$_hub_raw" ] && _hub_raw="~/.agents/skills"
-HUB="$(expand_path "$_hub_raw")"
+# bridge loop. This is a fixed constant (the industry-standard hub location), not an entry
+# in agents.cfg — there is no agent literally named "agents".
+HUB="$(expand_path '~/.agents/skills')"
 
 # resolve_target <agent> -> print the agent's skills directory; empty if unrecognized
 resolve_target() {

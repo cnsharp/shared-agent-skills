@@ -1,5 +1,5 @@
 # install.ps1 — On Windows, symlink the skills under this repo's skills/ into each AI
-# agent's (Claude Code / OpenAI Codex / Cursor / Gemini CLI / Windsurf / Cline / Kilo / Agents (shared ~/.agents/skills) /
+# agent's (Claude Code / OpenAI Codex / Cursor / Gemini CLI / Windsurf / Cline / Kilo / Hub (shared ~/.agents/skills) /
 # OpenClaw / Trae / Qoder / Kimi / OpenCode / GitHub Copilot / Goose / Continue / Zed /
 # WorkBuddy / CodeBuddy / Hermes, etc.) skills directory.
 #
@@ -459,10 +459,9 @@ else                       { $ActiveTools = $agents | Where-Object { $Selected -
 
 # ── Public skills hub (Open Agent Skills standard: ~/.agents/skills) ──
 # Agents whose DEFAULT_DIR equals this path receive public skills directly via the hub junction
-# and are skipped by the per-agent bridge loop. Derived from the 'agents' entry's DEFAULT_DIR;
-# defaults to ~/.agents/skills if that entry is absent.
-$Hub = (Get-Agent 'agents').defaultDir
-if (-not $Hub) { $Hub = Expand-Path '~/.agents/skills' }
+# and are skipped by the per-agent bridge loop. This is a fixed constant (the industry-standard
+# hub location), not an entry in agents.cfg — there is no agent literally named "agents".
+$Hub = Expand-Path '~/.agents/skills'
 
 # --check mode
 if ($DoCheck) {
